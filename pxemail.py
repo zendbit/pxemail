@@ -1,3 +1,9 @@
+'''
+Author  : Amru Rosyada
+Email   : amru.rosyada@gmail.com
+License : GPL3
+'''
+
 from email.parser import HeaderParser
 import email
 import imaplib
