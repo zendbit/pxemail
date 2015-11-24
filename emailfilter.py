@@ -1,3 +1,9 @@
+'''
+Author  : Amru Rosyada
+Email   : amru.rosyada@gmail.com
+License : GPL3
+'''
+
 class EmailFilter(object):
     '''
         this is filter builder that will return filter
