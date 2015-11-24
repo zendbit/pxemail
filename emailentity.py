@@ -1,3 +1,9 @@
+'''
+Author  : Amru Rosyada
+Email   : amru.rosyada@gmail.com
+License : GPL3
+'''
+
 import imaplib
 import smtplib
 imaplib.__MAXLINE = 10000000
