@@ -1,3 +1,9 @@
+'''
+Author  : Amru Rosyada
+Email   : amru.rosyada@gmail.com
+License : GPL3
+'''
+
 import smtplib, os
 from os.path import basename
 from email.mime.multipart import MIMEMultipart
