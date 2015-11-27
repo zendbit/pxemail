@@ -1,7 +1,7 @@
 '''
-Author  : Amru Rosyada
-Email   : amru.rosyada@gmail.com
-License : GPL3
+    Author  : Amru Rosyada
+    Email   : amru.rosyada@gmail.com
+    License : GPL3
 '''
 
 import imaplib
