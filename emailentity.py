@@ -1,12 +1,12 @@
 '''
     Author  : Amru Rosyada
     Email   : amru.rosyada@gmail.com
-    License : GPL3
+    License : GPL3 (http://www.gnu.org/licenses/gpl-3.0.en.html)
 '''
 
 import imaplib
 import smtplib
-imaplib.__MAXLINE = 10000000
+imaplib._MAXLINE = 1000000
 
 class EntityFlag(object):
     '''
@@ -102,6 +102,13 @@ class IMAPEntity(object):
             'is_login':False}
         
         return EntityFlag.SUCCESS_ADD_NEW_USER
+    
+    def get_all(self):
+        '''
+            get all entity imap user
+        '''
+        
+        return self.__imap_entity
         
     def get(self, host, username=None):
         
@@ -248,7 +255,14 @@ class SMTPEntity(object):
             return smtp_entity.get(username)
             
         return None
+    
+    def get_all(self):
+        '''
+            get all entity smtp user
+        '''
         
+        return self.__smtp_entity
+            
     def get_smtp(self, host, username):
         '''
             get user smtp configuration

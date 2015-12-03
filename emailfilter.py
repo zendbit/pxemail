@@ -1,7 +1,7 @@
 '''
     Author  : Amru Rosyada
     Email   : amru.rosyada@gmail.com
-    License : GPL3
+    License : GPL3 (http://www.gnu.org/licenses/gpl-3.0.en.html)
 '''
 
 class EmailFilter(object):

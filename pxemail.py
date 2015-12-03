@@ -1,13 +1,17 @@
 '''
     Author  : Amru Rosyada
     Email   : amru.rosyada@gmail.com
-    License : GPL3
+    License : GPL3 (http://www.gnu.org/licenses/gpl-3.0.en.html)
 '''
 
-from email.parser import HeaderParser
 import email
 import imaplib
 import smtplib
+import pickle
+import copy
+
+from email.parser import HeaderParser
+from pickle import Pickler, Unpickler
 
 from emailentity import IMAPEntity, SMTPEntity, EntityFlag
 from emailfilter import EmailFilter
@@ -57,7 +61,45 @@ class PxEmail(object):
         
         return self.__imap_entity.add(host, username, password, port,
             connection_type, keyfile, certfile, ssl_context, force)
+    
+    def imap_serialize(self, filename):
+        '''
+            serialize imap object
+            save it as pickle object
+        '''
             
+        try:
+            imap_entity_dump = {}
+            imap_entity = self.__imap_entity.get_all()
+            
+            for entity in imap_entity:
+                imap_entity_item = copy.copy(imap_entity.get(entity))
+                imap_entity_dump[entity] = {}
+                for imap_user in imap_entity_item:
+                    imap_entity_dump[entity][imap_user] = imap_entity_item.get(imap_user)
+                    imap_entity_dump.get(entity).get(imap_user)['imap'] = None
+            
+            # serialize imap user         
+            Pickler(open(filename + '.imap.entity', 'wb'), protocol=pickle.HIGHEST_PROTOCOL).dump(imap_entity_dump)
+            # serialize imap directory
+            Pickler(open(filename + '.imap.maildir', 'wb'), protocol=pickle.HIGHEST_PROTOCOL).dump(self.__imap_local_dir)
+        except Exception as e:
+            print(e)
+            
+    def imap_unserialize(self, filename):
+        '''
+            unserialize imap object
+            load and init __imap_entity
+        '''
+        
+        try:
+            return {'entity':Unpickler(open(filename + '.imap.entity', 'rb')).load(),
+                'maildir':Unpickler(open(filename + '.imap.maildir', 'rb')).load()}
+        except Exception as e:
+            print(e)
+            
+        return None
+        
     def imap_get_user(self, host, username=None):
         '''
             get user imap configuration
@@ -197,7 +239,14 @@ class PxEmail(object):
             pattern default match to any
         '''
         
-        return self.imap_get().list()
+        status, msg = self.imap_get().list()
+        
+        try:
+            msg = [mailbox.decode('UTF-8') for mailbox in msg]
+        except Exception as e:
+            print(e)
+        
+        return {'status':status, 'msg':msg}
             
     def imap_mailbox_select(self, mailbox='INBOX', readonly=False):
         '''
@@ -205,7 +254,9 @@ class PxEmail(object):
             default is INBOX
         '''
             
-        self.imap_get().select(mailbox, readonly)
+        status, msg = self.imap_get().select(mailbox, readonly)
+        
+        return {'status':status, 'msg':msg}
     
     def imap_get_search(self, *criterion):
         '''
@@ -214,7 +265,16 @@ class PxEmail(object):
             *criterion is for search criterion ex: 'FROM', '"LDJ"' or '(FROM "LDJ")'
         '''
         
-        return self.imap_get().uid('search', None, *criterion)
+        status, msg = self.imap_get().uid('search', None, *criterion)
+        
+        email_ids = []
+        if len(msg):
+            print(msg[0].split())
+            msg_ids = msg[0].decode('UTF-8')
+            if msg_ids != '':
+                email_ids = msg_ids.split(' ')
+        
+        return {'status':status, 'msg':email_ids}
         
     def imap_get_fetch(self, email_id, *criterion):
         '''
@@ -222,7 +282,30 @@ class PxEmail(object):
             for specific email_id
         '''
         
-        return self.imap_get().uid('fetch', email_id, *criterion)
+        status, msg = self.imap_get().uid('fetch', email_id, *criterion)
+        
+        return {'status':status, 'msg':msg}
+        
+    def imap_store_command(self, message_id, command, flag_list):
+        '''
+            store imap flags
+            command should be 'FLAGS', '+FLAGS', '-FLAGS', optionaly with suffix of ."SILENT".
+            flag_list must be valid flag '\\Deleted', '\\Seen' etc
+        '''
+        
+        status, msg = self.imap_get().uid('STORE', message_id, command, flag_list)
+        
+        return {'status':status, 'msg':msg}
+    
+    def imap_expunge(self):
+        '''
+            commit all change command to email
+            should call this after change email flag
+        '''
+        
+        status, msg = self.imap_get().expunge()
+        
+        return {'status':status, 'msg':msg}
         
     def imap_get_fetch_header(self, email_id):
         '''
@@ -231,13 +314,14 @@ class PxEmail(object):
             parameter is email_id returned from serach result
         '''
         
-        status, header = self.imap_get_fetch(email_id, '(BODY[HEADER])')
-        if status.lower() != 'ok':
+        email_info = self.imap_get_fetch(email_id, '(BODY[HEADER])')
+        if email_info.get('status').lower() != 'ok':
             return None
         
-        header = header[0][1].decode('UTF-8') #get header string then decode
+        header = email_info.get('msg')[0][1].decode('UTF-8') #get header string then decode
         parser = HeaderParser()
-        return parser.parsestr(header)
+        
+        return {'status':'OK', 'msg':parser.parsestr(header)}
         
     def imap_get_fetch_content(self, email_id, download_attachment=False):
         '''
@@ -257,7 +341,7 @@ class PxEmail(object):
             }
         '''
         
-        status, data = pyemail.imap_get_fetch(email_id, '(BODY[])')
+        status, data = self.imap_get_fetch(email_id, '(BODY[])')
         
         email_msg = email.message_from_bytes(data[0][1])
         if status.lower() != 'ok':
@@ -298,7 +382,7 @@ class PxEmail(object):
                 
         # make sure content is in text
         email_content['content'] = ''.join(email_content.get('content'))
-        return email_content
+        return {'status':status, 'msg':email_content}
     
     def imap_set_directory(self, directory):
         '''
@@ -334,7 +418,42 @@ class PxEmail(object):
         
         return self.__smtp_entity.add(host, username, password, port, local_hostname, source_address,
             connection_type, keyfile, certfile, context, force)
+    
+    def smtp_serialize(self, filename):
+        '''
+            serialize smtp object
+            save it as pickle object
+        '''
+            
+        try:
+            smtp_entity_dump = {}
+            smtp_entity = self.__smtp_entity.get_all()
+            
+            for entity in smtp_entity:
+                smtp_entity_item = copy.copy(smtp_entity.get(entity))
+                smtp_entity_dump[entity] = {}
+                for smtp_user in smtp_entity_item:
+                    smtp_entity_dump[entity][smtp_user] = smtp_entity_item.get(smtp_user)
+                    smtp_entity_dump.get(entity).get(smtp_user)['smtp'] = None
+            
+            # serialize smtp user         
+            Pickler(open(filename + '.smtp.entity', 'wb'), protocol=pickle.HIGHEST_PROTOCOL).dump(smtp_entity_dump)
+        except Exception as e:
+            print(e)
+            
+    def smtp_unserialize(self, filename):
+        '''
+            unserialize smtp object
+            load and init __smtp_entity
+        '''
         
+        try:
+            return {'entity':Unpickler(open(filename + '.smtp.entity', 'rb')).load()}
+        except Exception as e:
+            print(e)
+            
+        return None
+            
     def smtp_get_user(self, host, username=None):
         '''
             get user smtp configuration
@@ -428,19 +547,29 @@ class PxEmail(object):
         
 if __name__ == '__main__':
     pyemail = PxEmail()
-    pyemail.imap_add('imap.gmail.com', 'amru.rosyada@gmail.com', '', connection_type=EntityFlag.CONNECTION_SSL)
-    pyemail.imap_set_active('imap.gmail.com', 'amru.rosyada@gmail.com')
+    #pyemail.imap_add('imap.gmail.com', 'amru.rosyada@gmail.com', '', connection_type=EntityFlag.CONNECTION_SSL)
+    #pyemail.imap_add('imap.gmail.com', 'amrurosyada@gmail.com', '', connection_type=EntityFlag.CONNECTION_SSL)
+    #pyemail.imap_serialize('test')
+    #print(pyemail.imap_unserialize('test'))
+    #pyemail.imap_set_active('imap.gmail.com', 'amru.rosyada@gmail.com')
     #print(pyemail.imap_is_login())
-    pyemail.imap_login()
+    #pyemail.imap_login()
+    #print(pyemail.imap_get_list())
     #print(pyemail.imap_is_login())
-    pyemail.imap_mailbox_select()
-    #filter_test = EmailFilter().set_from('amru.rosyada@gmail.com').set_all()
+    #pyemail.imap_mailbox_select(readonly=False)
+    #filter_test = EmailFilter().set_seen()
     #filter_test = filter_test.generate()
+    #print(filter_test)
     #emails = pyemail.imap_get_search(filter_test)
-    #print(emails)
+    #if emails:
+    #    for email in emails.get('msg'):
+    #        print(email)
+    #        print(pyemail.imap_get_fetch_header(email).get('msg').get('Subject'))
     #print(pyemail.imap_get_fetch_content('30110'))
-    print(pyemail.imap_get_fetch_header('1360'))
-    pyemail.imap_logout()
+    #print(pyemail.imap_get_fetch_header('30411'))
+    #print(pyemail.imap_store_command('30411', '-FLAGS', '(\Seen)'))
+    #print(pyemail.imap_expunge())
+    #pyemail.imap_logout()
     
     #print(pyemail.imap_is_login())
     #pyemail.imap_reconnect()
@@ -454,7 +583,10 @@ if __name__ == '__main__':
     #message = MessageBuilder('amru.rosyada@gmail.com', ['wahyu@qajoo.com'], 'test from message manager')
     #message.attach_text('halo mas wah')
     #message.attach_application('Video.MOV')
-    #pyemail.smtp_add('smtp.gmail.com', 'amru.rosyada@gmail.com', '', connection_type=EntityFlag.CONNECTION_SSL)
+    pyemail.smtp_add('smtp.gmail.com', 'amru.rosyada@gmail.com', '', connection_type=EntityFlag.CONNECTION_SSL)
+    pyemail.smtp_add('smtp.gmail.com', 'amrurosyada@gmail.com', '', connection_type=EntityFlag.CONNECTION_SSL)
+    pyemail.smtp_serialize('test')
+    print(pyemail.smtp_unserialize('test'))
     #pyemail.smtp_set_active('smtp.gmail.com', 'amru.rosyada@gmail.com')
     #pyemail.smtp_login()
     #pyemail.smtp_send_message(message)
