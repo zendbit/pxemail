@@ -9,6 +9,8 @@ import imaplib
 import smtplib
 import pickle
 import copy
+import json
+import os
 
 from email.parser import HeaderParser
 from pickle import Pickler, Unpickler
@@ -35,7 +37,7 @@ class PxEmail(object):
         self.__imap_entity = IMAPEntity()
         self.__smtp_entity = SMTPEntity()
         
-        self.__imap_local_dir = ''
+        self.__imap_local_dir = os.getcwd() + os.path.sep + 'pxemail_cache'
         
         # this will be override when call imap_set_active(host, username)
         self.__active_imap_user = {'host':'', 'username':''}
@@ -269,7 +271,6 @@ class PxEmail(object):
         
         email_ids = []
         if len(msg):
-            print(msg[0].split())
             msg_ids = msg[0].decode('UTF-8')
             if msg_ids != '':
                 email_ids = msg_ids.split(' ')
@@ -314,6 +315,11 @@ class PxEmail(object):
             parameter is email_id returned from serach result
         '''
         
+        # check serialize cache
+        email_cache = self.imap_unserialize_email_from_file(email_id)
+        if email_cache:
+            return {'status':'OK', 'msg':email_cache}
+        
         email_info = self.imap_get_fetch(email_id, '(BODY[HEADER])')
         if email_info.get('status').lower() != 'ok':
             return None
@@ -321,7 +327,19 @@ class PxEmail(object):
         header = email_info.get('msg')[0][1].decode('UTF-8') #get header string then decode
         parser = HeaderParser()
         
-        return {'status':'OK', 'msg':parser.parsestr(header)}
+        # serialize
+        parsed_header = parser.parsestr(header)
+        serialized_eml = {}
+        serialized_eml['ID'] = email_id
+        serialized_eml['From'] = parsed_header.get('From')
+        serialized_eml['To'] = parsed_header.get('To')
+        serialized_eml['CC'] = parsed_header.get('CC')
+        serialized_eml['BCC'] = parsed_header.get('BCC')
+        serialized_eml['Subject'] = parsed_header.get('Subject')
+        serialized_eml['Date'] = parsed_header.get('Date')
+        self.imap_serialize_email_to_file(serialized_eml)
+            
+        return {'status':'OK', 'msg':parsed_header}
         
     def imap_get_fetch_content(self, email_id, download_attachment=False):
         '''
@@ -341,48 +359,70 @@ class PxEmail(object):
             }
         '''
         
-        status, data = self.imap_get_fetch(email_id, '(BODY[])')
+        cache_dir = self.imap_init_serialize_dir(email_id)
         
-        email_msg = email.message_from_bytes(data[0][1])
+        # check serialize cache
+        email_cache = self.imap_get_fetch_header(email_id)
+        if email_cache and email_cache.get('msg') and email_cache.get('msg').get('Message'):
+            return email_cache
+        
+        email_cache = email_cache.get('msg')
+        
+        #email_content = {'content':[], 'attachment':[], 'inline_attachment':[]}
+        email_cache['Message'] = []
+        email_cache['Attachment'] = []
+        email_cache['InlineAttachment'] = []
+        email_cache['ID'] = email_id
+        
+        body = self.imap_get_fetch(email_id, '(BODY[])')
+        status = body.get('status')
+        data = body.get('msg')[0][1]
+        email_msg = email.message_from_bytes(data)
+        
         if status.lower() != 'ok':
             return None
         
-        email_content = {'content':[], 'attachment':[], 'inline_attachment':[]}
-        
         # check if download_attachment is set
-        if download_attachment:
-            for part in email_msg.walk():
-                if part.get('Content-Disposition'):
-                    # save attachment
-                    filename = part.get_filename()
-                    fp = open(filename, 'wb')
-                    fp.write(part.get_payload(decode=True))
-                    fp.close()
-                    # add attachment filename
-                    email_content.get('attachment').append({'name':filename, 'mime':part.get_content_type()})
-                    
-                # if plain text or html and not disposition
-                elif part.get_content_type() == 'text/plain' or part.get_content_type() == 'text/html':
-                    body = part.get_payload(decode=True)
-                    body = body.decode()
-                    email_content.get('content').append(body)
-                        
-                # else save as inline attachment
-                # elif part.get_content_type().find('image/') != -1 or part.get_content_type().find('video/') != -1 or part.get_content_type().find('application/') != -1 or part.get('Content-Disposition'):
-                else:
-                    # save attachment
-                    filename = part.get_filename()
-                    fp = open(filename, 'wb')
-                    fp.write(part.get_payload(decode=True))
-                    fp.close()
-                    # add attachment filename
-                    email_content.get('inline_attachment').append({'name':filename, 'mime':part.get_content_type()})
-                    # append inline attachment value to content
-                    email_content.get('content').append('[pxemail:inline' + filename + ']')
+        for part in email_msg.walk():
+            if part.get('Content-Disposition') and download_attachment:
+                # save attachment
+                filename = part.get_filename()
+                fp = open(filename, 'wb')
+                fp.write(part.get_payload(decode=True))
+                fp.close()
+                # add attachment filename
+                #email_content.get('attachment').append({'name':filename, 'mime':part.get_content_type()})
+                email_cache.get('Attachment').append({'name':filename, 'mime':part.get_content_type()})
                 
+            # if plain text or html and not disposition
+            elif part.get_content_type() == 'text/plain' or part.get_content_type() == 'text/html':
+                body = part.get_payload(decode=True)
+                body = body.decode()
+                #email_content.get('content').append(body)
+                email_cache.get('Message').append(body)
+                    
+            # else save as inline attachment
+            # elif part.get_content_type().find('image/') != -1 or part.get_content_type().find('video/') != -1 or part.get_content_type().find('application/') != -1 or part.get('Content-Disposition'):
+            elif download_attachment:
+                # save attachment
+                filename = part.get_filename()
+                fp = open(cache_dir + os.path.sep + filename, 'wb')
+                fp.write(part.get_payload(decode=True))
+                fp.close()
+                # add attachment filename
+                #email_content.get('inline_attachment').append({'name':filename, 'mime':part.get_content_type()})
+                email_cache.get('InlineAttachment').append({'name':filename, 'mime':part.get_content_type()})
+                # append inline attachment value to content
+                #email_content.get('content').append('[pxemail:inline' + filename + ']')
+                email_cache.get('Message').append('[pxemail:inline' + filename + ']')
+        
         # make sure content is in text
-        email_content['content'] = ''.join(email_content.get('content'))
-        return {'status':status, 'msg':email_content}
+        #email_content['content'] = ''.join(email_content.get('content'))
+        email_cache['Message'] = ''.join(email_cache.get('Message'))
+        
+        #return {'status':status, 'msg':email_content}
+        self.imap_serialize_email_to_file(email_cache)
+        return {'status':status, 'msg':email_cache}
     
     def imap_set_directory(self, directory):
         '''
@@ -391,6 +431,72 @@ class PxEmail(object):
         '''
         
         self.__imap_local_dir = directory
+    
+    def imap_init_serialize_dir(self, email_id):
+        '''
+            check if local directory for serialize already exists
+            if not create it
+        '''
+        
+        dir_path = self.__imap_local_dir + os.path.sep + self.__active_imap_user.get('username') + os.path.sep + email_id
+        if not os.path.isdir(dir_path):
+            os.makedirs(dir_path)
+            
+        return dir_path
+    
+    def imap_unserialize_email_from_file(self, email_id):
+        '''
+            unserialize json from email cache to variable
+        '''
+        
+        dir_path = self.imap_init_serialize_dir(email_id)
+        file = dir_path + os.path.sep + email_id
+        
+        content = None
+        
+        '''if os.path.exists(file):
+            f = open(file, 'r')
+            content = f.readline()
+            f.close()
+            
+            if content:
+                content = json.loads(content)
+        ''' 
+        
+        try:
+            return Unpickler(open(file, 'rb')).load()
+            
+        except Exception as e:
+            print(e)
+               
+        return content
+        
+    def imap_serialize_email_to_file(self, email_data):
+        '''
+            email_data = {
+                'Subject':'',
+                'CC':'',
+                'BCC':'',
+                'Attachment':[],
+                'InlineAttachment':[],
+                'ID':''
+            }
+        '''
+        
+        try:
+            dir_path = self.imap_init_serialize_dir(email_data.get('ID'))
+            file = dir_path + os.path.sep + email_data.get('ID')
+            Pickler(open(file, 'wb'), protocol=pickle.HIGHEST_PROTOCOL).dump(email_data)
+            
+        except Exception as e:
+            print(e)
+                
+    def is_email_serialized(self, email_id):
+        '''
+            check email data is alrady exists or not
+        '''
+        
+        return os.path.exists(self.__imap_local_dir + os.path.sep + self.__active_imap_user.get('username') + os.path.sep + email_id)
         
     ####################################
     ####### SMTP FUNCTIONALITY #########
@@ -547,29 +653,39 @@ class PxEmail(object):
         
 if __name__ == '__main__':
     pyemail = PxEmail()
-    #pyemail.imap_add('imap.gmail.com', 'amru.rosyada@gmail.com', '', connection_type=EntityFlag.CONNECTION_SSL)
+    pyemail.imap_add('imap.gmail.com', 'amru.rosyada@gmail.com', 'secret', connection_type=EntityFlag.CONNECTION_SSL)
     #pyemail.imap_add('imap.gmail.com', 'amrurosyada@gmail.com', '', connection_type=EntityFlag.CONNECTION_SSL)
     #pyemail.imap_serialize('test')
     #print(pyemail.imap_unserialize('test'))
-    #pyemail.imap_set_active('imap.gmail.com', 'amru.rosyada@gmail.com')
+    pyemail.imap_set_active('imap.gmail.com', 'amru.rosyada@gmail.com')
     #print(pyemail.imap_is_login())
-    #pyemail.imap_login()
+    pyemail.imap_login()
     #print(pyemail.imap_get_list())
     #print(pyemail.imap_is_login())
-    #pyemail.imap_mailbox_select(readonly=False)
-    #filter_test = EmailFilter().set_seen()
-    #filter_test = filter_test.generate()
+    pyemail.imap_mailbox_select(readonly=False)
+    #filter_test = EmailFilter().set_seen().set_from('developer@insideapple.apple.com')
+    filter_test = EmailFilter().set_from('developer@insideapple.apple.com')
+    filter_test = filter_test.generate()
     #print(filter_test)
-    #emails = pyemail.imap_get_search(filter_test)
-    #if emails:
-    #    for email in emails.get('msg'):
-    #        print(email)
-    #        print(pyemail.imap_get_fetch_header(email).get('msg').get('Subject'))
+    emails = pyemail.imap_get_search(filter_test)
+    #serialized_eml = {}
+    if emails:
+        for eml in emails.get('msg'):
+            #print(eml)
+            #print(pyemail.imap_get_fetch_header(eml))
+            #print(pyemail.imap_get_fetch_header(eml).get('msg'))
+            emaildata = pyemail.imap_get_fetch_content(eml).get('msg')
+            if emaildata:
+                print('++++++++++')
+                print('From %s' % emaildata.get('From'))
+                print('Subject %s' % emaildata.get('Subject'))
+                print('Date %s' % emaildata.get('Date'))
+    #print(serialized_eml)
     #print(pyemail.imap_get_fetch_content('30110'))
     #print(pyemail.imap_get_fetch_header('30411'))
     #print(pyemail.imap_store_command('30411', '-FLAGS', '(\Seen)'))
     #print(pyemail.imap_expunge())
-    #pyemail.imap_logout()
+    pyemail.imap_logout()
     
     #print(pyemail.imap_is_login())
     #pyemail.imap_reconnect()
@@ -583,10 +699,10 @@ if __name__ == '__main__':
     #message = MessageBuilder('amru.rosyada@gmail.com', ['wahyu@qajoo.com'], 'test from message manager')
     #message.attach_text('halo mas wah')
     #message.attach_application('Video.MOV')
-    pyemail.smtp_add('smtp.gmail.com', 'amru.rosyada@gmail.com', '', connection_type=EntityFlag.CONNECTION_SSL)
-    pyemail.smtp_add('smtp.gmail.com', 'amrurosyada@gmail.com', '', connection_type=EntityFlag.CONNECTION_SSL)
-    pyemail.smtp_serialize('test')
-    print(pyemail.smtp_unserialize('test'))
+    #pyemail.smtp_add('smtp.gmail.com', 'amru.rosyada@gmail.com', '', connection_type=EntityFlag.CONNECTION_SSL)
+    #pyemail.smtp_add('smtp.gmail.com', 'amrurosyada@gmail.com', '', connection_type=EntityFlag.CONNECTION_SSL)
+    #pyemail.smtp_serialize('test')
+    #print(pyemail.smtp_unserialize('test'))
     #pyemail.smtp_set_active('smtp.gmail.com', 'amru.rosyada@gmail.com')
     #pyemail.smtp_login()
     #pyemail.smtp_send_message(message)
